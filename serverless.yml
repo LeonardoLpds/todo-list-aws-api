@@ -1,0 +1,56 @@
+service: todo-list-aws-api
+frameworkVersion: '3'
+
+custom:
+  tableName: 'todos-table-${sls:stage}'
+  dynamodb:
+    stages:
+      - ${sls:stage}
+    start:
+      migrate: true
+  serverless-offline-watcher:
+    - path: src
+      command: echo "index.ts was modified!"
+
+plugins:
+  - serverless-offline
+  - serverless-dynamodb-local
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - Fn::GetAtt: [ TodosTable, Arn ]
+  environment:
+    TODOS_TABLE: ${self:custom.tableName}
+
+functions:
+  api:
+    handler: dist/index.handler
+    events:
+      - httpApi: '*'
+
+resources:
+  Resources:
+    TodosTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:custom.tableName}
