@@ -1,24 +1,35 @@
 service: todo-list-aws-api
 frameworkVersion: '3'
 
+plugins:
+  - serverless-offline
+  - serverless-dynamodb-local
+
+# Custom variables
 custom:
   tableName: 'todos-table-${sls:stage}'
+  stage: ${opt:stage, "dev"}
   dynamodb:
     stages:
       - ${sls:stage}
     start:
       migrate: true
-  serverless-offline-watcher:
-    - path: src
-      command: echo "index.ts was modified!"
 
-plugins:
-  - serverless-offline
-  - serverless-dynamodb-local
-
+# Providers of the infra
 provider:
   name: aws
   runtime: nodejs14.x
+  stage: ${self:custom.stage}
+  environment:
+    TODOS_TABLE: ${self:custom.tableName}
+  httpApi:
+    cors: true
+    authorizers:
+      cognitoAuthorizer:
+        identitySource: $request.header.Authorization
+        issuerUrl: {"Fn::Join": ["", ["https://cognito-idp.${aws:region}.amazonaws.com/", Ref: CognitoUserPool]]}
+        audience:
+          - Ref: UserPoolClient
   iam:
     role:
       statements:
@@ -32,25 +43,73 @@ provider:
             - dynamodb:DeleteItem
           Resource:
             - Fn::GetAtt: [ TodosTable, Arn ]
-  environment:
-    TODOS_TABLE: ${self:custom.tableName}
 
+# Functions and lambdas
 functions:
   api:
     handler: dist/index.handler
     events:
-      - httpApi: '*'
+      - httpApi:
+          method: '*'
+          path: '*'
+          authorizer:
+            name: cognitoAuthorizer
 
+# AWS Resources
 resources:
   Resources:
     TodosTable:
       Type: AWS::DynamoDB::Table
       Properties:
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:custom.tableName}
         AttributeDefinitions:
           - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
             AttributeType: S
         KeySchema:
           - AttributeName: PK
             KeyType: HASH
-        BillingMode: PAY_PER_REQUEST
-        TableName: ${self:custom.tableName}
+          - AttributeName: SK
+            KeyType: RANGE
+
+    # Cognito Config
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: todo-list-user-pool
+        AutoVerifiedAttributes:
+          - email
+        Schema:
+          - Name: email
+            AttributeDataType: String
+            Required: true
+        AliasAttributes:
+          - email
+    UserPoolClient:
+      DependsOn:
+        - CognitoIdentityProvider
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: todo-list-user-pool-client-${sls:stage}
+        UserPoolId:
+          Ref: CognitoUserPool
+        GenerateSecret: false
+        CallbackURLs:
+          - "http://localhost:5173"
+        SupportedIdentityProviders:
+          - Google
+    CognitoIdentityProvider:
+      Type: AWS::Cognito::UserPoolIdentityProvider
+      Properties:
+        ProviderName: Google
+        ProviderType: Google
+        ProviderDetails:
+          client_id: ${env:GOOGLE_CLIENT_ID}
+          client_secret: ${env:GOOGLE_CLIENT_SECRET}
+          authorize_scopes: "openid profile email"
+        UserPoolId:
+          Ref: CognitoUserPool
+        AttributeMapping:
+          email: "email"
